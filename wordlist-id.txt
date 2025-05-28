@@ -1,3 +1,8 @@
+admin
+administrator
+Administrator
+Administrator123
+@Administrator
 123456
 @123456
 @Nandar001
@@ -395,6 +400,8 @@ rrqr7
 lumbalumba
 pascol
 botakpascol
-admin
 admin123
 Admin12345
+senayanuser
+senayanjakarta
+Senayanjakarta
