@@ -93,8 +93,9 @@ def find_targets_from_dork(dork: str, limit: int) -> List[str]:
         sys.exit(1)
 
     logging.info("Mencari target via Google dork: '%s' (max %d)", dork, limit)
-    results = []
-    for url in search(query=dork, num_results=limit, pause=2):
+    results: List[str] = []
+    for url in search(dork, limit):
+        time.sleep(1)
         m = re.match(r"https?://[^/]+", url)
         if m:
             root = m.group(0)
